@@ -1,0 +1,96 @@
+variables:
+  TF_USERNAME: $GITLAB_USER_LOGIN
+  TF_PASSWORD: $GITLAB_ACCESS_TOKEN
+  TF_STATE_NAME: default
+  TF_ADDRESS: ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/terraform/state/${TF_STATE_NAME}
+  TF_ROOT: ${CI_PROJECT_DIR}/environments/${TF_STATE_NAME}
+
+default:
+  image:
+    name: "$CI_TEMPLATE_REGISTRY_HOST/gitlab-org/terraform-images/releases/1.5:v1.8.0"
+
+cache:
+  key: "${TF_STATE_NAME}"
+  paths:
+    - .terraform
+
+stages:
+  - init
+  - validate
+  - plan
+  - deploy
+  - cleanup
+
+init:
+  stage: init
+  before_script:
+    - terraform --version
+    - echo ${TF_USERNAME}
+    - echo ${TF_PASSWORD}
+    - echo ${TF_STATE_NAME}
+    - echo ${TF_ADDRESS}
+    - echo ${TF_ROOT}
+  script:
+    - |
+      terraform init -reconfigure \
+        -backend-config="address=${TF_ADDRESS}" \
+        -backend-config="lock_address=${TF_ADDRESS}/lock" \
+        -backend-config="unlock_address=${TF_ADDRESS}/lock" \
+        -backend-config="username=${TF_USERNAME}" \
+        -backend-config="password=${TF_PASSWORD}" \
+        -backend-config="lock_method=POST" \
+        -backend-config="unlock_method=DELETE" \
+        -backend-config="retry_wait_min=5"
+  when: manual
+
+fmt:
+  stage: validate
+  allow_failure: true
+  script:
+    - ls -la
+    - terraform fmt -check
+
+validate:
+  stage: validate
+  allow_failure: true
+  script:
+    - terraform validate
+
+plan:
+  stage: plan
+  script:
+    - terraform plan -out plan.cache
+    - terraform show -json plan.cache
+  artifacts:
+    name: plan
+    paths:
+      - plan.cache
+
+deploy:
+  stage: deploy
+  script:
+    - terraform apply -auto-approve plan.cache
+  dependencies:
+    - plan
+  environment:
+    name: $TF_STATE_NAME
+  when: manual
+
+report:
+  stage: cleanup
+  script:
+    - terraform output > output.txt
+  environment:
+    name: $TF_STATE_NAME
+  when: manual
+  artifacts:
+    paths:
+      - output.txt
+
+cleanup:
+  stage: cleanup
+  script:
+    - terraform destroy -auto-approve
+  environment:
+    name: $TF_STATE_NAME
+  when: manual
